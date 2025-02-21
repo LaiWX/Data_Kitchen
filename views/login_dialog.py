@@ -9,6 +9,7 @@ class LoginDialog(QDialog):
         self.setup_ui()
         self.username = ""
         self.password = ""
+        self.base_url = ""
         self.save_credentials = False
 
     def setup_ui(self):
@@ -34,6 +35,14 @@ class LoginDialog(QDialog):
         password_layout.addWidget(self.password_input)
         layout.addLayout(password_layout)
         
+        # Base URL
+        base_url_layout = QHBoxLayout()
+        base_url_label = QLabel("Base URL:")
+        self.base_url_input = QLineEdit()
+        base_url_layout.addWidget(base_url_label)
+        base_url_layout.addWidget(self.base_url_input)
+        layout.addLayout(base_url_layout)
+        
         # Remember me checkbox
         self.remember_checkbox = QCheckBox("Remember credentials")
         layout.addWidget(self.remember_checkbox)
@@ -53,11 +62,13 @@ class LoginDialog(QDialog):
     def accept(self):
         self.username = self.username_input.text()
         self.password = self.password_input.text()
+        self.base_url = self.base_url_input.text().strip()
         self.save_credentials = self.remember_checkbox.isChecked()
         super().accept()
         
-    def set_credentials(self, username: str, password: str):
+    def set_credentials(self, username: str, password: str, base_url: str = ""):
         """Pre-fill credentials if available"""
         self.username_input.setText(username)
         self.password_input.setText(password)
+        self.base_url_input.setText(base_url)
         self.remember_checkbox.setChecked(True) 

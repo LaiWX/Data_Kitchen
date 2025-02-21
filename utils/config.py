@@ -34,23 +34,26 @@ class ConfigManager:
             return {'Authorization': f'Basic {auth}'}
         return None
 
-    def set_credentials(self, username: str, password: str):
-        """Save credentials to config"""
+    def set_credentials(self, username: str, password: str, base_url: str = None):
+        """Save credentials and optionally base_url to config"""
         self.config['username'] = username
         self.config['password'] = password
+        if base_url:
+            self.config['base_url'] = base_url
         self.save_config()
 
-    def get_last_url(self) -> Optional[str]:
-        """Get last used URL"""
-        return self.config.get('last_url')
+    def get_base_url(self) -> Optional[str]:
+        """Get base URL"""
+        return self.config.get('base_url')
 
-    def set_last_url(self, url: str):
-        """Save last used URL"""
-        self.config['last_url'] = url
+    def set_base_url(self, url: str):
+        """Save base URL"""
+        self.config['base_url'] = url
         self.save_config()
 
     def clear_credentials(self):
-        """Clear saved credentials"""
+        """Clear saved credentials and base_url"""
         self.config.pop('username', None)
         self.config.pop('password', None)
+        self.config.pop('base_url', None)
         self.save_config() 

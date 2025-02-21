@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (QTreeWidget, QTreeWidgetItem, QMenu, 
-                                QAbstractItemView, QHeaderView)
+                                QAbstractItemView, QHeaderView, QTreeWidgetItemIterator)
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QIcon, QAction
 from datetime import datetime

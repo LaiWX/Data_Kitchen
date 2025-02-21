@@ -1,24 +1,79 @@
 import os
-from typing import Optional, Callable
+from typing import Optional, Callable, Dict, List, Tuple
 from PySide6.QtCore import QObject, Signal
 import threading
-from .network import NetworkManager
+import queue
+from .network import NetworkManager, FileItem
 
 class DownloadManager(QObject):
     progress_updated = Signal(str, float)  # file_name, progress percentage
+    overall_progress_updated = Signal(float)  # overall progress percentage
     download_completed = Signal(str)  # file_name
     download_error = Signal(str, str)  # file_name, error message
+    directory_scan_completed = Signal(str, int)  # directory name, total files
+    all_downloads_completed = Signal()  # emitted when all downloads are done
 
-    def __init__(self):
+    def __init__(self, max_concurrent_downloads: int = 3):
         super().__init__()
         self.network = NetworkManager()
-        self._active_downloads = {}
+        self._active_downloads: Dict[str, threading.Thread] = {}
+        self._download_queue = queue.Queue()
         self._lock = threading.Lock()
+        self._max_concurrent_downloads = max_concurrent_downloads
+        self._queue_processor = None
+        self._stop_queue = False
+        self._total_files = 0
+        self._completed_files = 0
+        
+        # Start queue processor
+        self._start_queue_processor()
+
+    def _start_queue_processor(self):
+        """Start the queue processor thread"""
+        if self._queue_processor is None:
+            self._stop_queue = False
+            self._queue_processor = threading.Thread(target=self._process_queue)
+            self._queue_processor.daemon = True
+            self._queue_processor.start()
+
+    def _process_queue(self):
+        """Process downloads from the queue"""
+        while not self._stop_queue:
+            try:
+                # Check if we can start new downloads
+                with self._lock:
+                    if len(self._active_downloads) >= self._max_concurrent_downloads:
+                        # Wait a bit before checking again
+                        threading.Event().wait(0.1)
+                        continue
+
+                # Get next download from queue with timeout
+                try:
+                    url, dest_path, skip_images = self._download_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
+
+                # Start the download
+                thread = threading.Thread(
+                    target=self._download_worker,
+                    args=(url, dest_path, skip_images)
+                )
+                with self._lock:
+                    self._active_downloads[url] = thread
+                thread.start()
+
+            except Exception:
+                # Log error but keep processing
+                continue
 
     def _download_worker(self, url: str, dest_path: str, skip_images: bool = False):
         try:
             # Check if we should skip images
             if skip_images and self._is_image(url):
+                with self._lock:
+                    self._completed_files += 1
+                    progress = (self._completed_files / self._total_files) * 100
+                    self.overall_progress_updated.emit(progress)
                 return
 
             # Create directory if it doesn't exist
@@ -44,35 +99,79 @@ class DownloadManager(QObject):
                             self.progress_updated.emit(os.path.basename(dest_path), progress)
 
             self.download_completed.emit(os.path.basename(dest_path))
+            
+            with self._lock:
+                self._completed_files += 1
+                progress = (self._completed_files / self._total_files) * 100
+                self.overall_progress_updated.emit(progress)
+                
+                # Check if all downloads are completed
+                if self._completed_files == self._total_files:
+                    self.all_downloads_completed.emit()
 
         except Exception as e:
             self.download_error.emit(os.path.basename(dest_path), str(e))
         finally:
             with self._lock:
-                if url in self._active_downloads:
-                    del self._active_downloads[url]
+                self._active_downloads.pop(url, None)
+
+    def start_batch_download(self, files: List[FileItem], base_dir: str, skip_images: bool = False):
+        """Start downloading a batch of files"""
+        with self._lock:
+            self._total_files = len(files)
+            self._completed_files = 0
+            
+        for file in files:
+            dest_path = os.path.join(base_dir, file.name)
+            self._download_queue.put((file.url, dest_path, skip_images))
 
     def start_download(self, url: str, dest_path: str, skip_images: bool = False):
-        """Start a new download in a separate thread"""
-        with self._lock:
-            if url in self._active_downloads:
-                return
-            
-            thread = threading.Thread(
-                target=self._download_worker,
+        """Start a new download"""
+        # Check if this is a directory download
+        if url.endswith('/'):
+            threading.Thread(
+                target=self._scan_and_queue_directory,
                 args=(url, dest_path, skip_images)
-            )
-            self._active_downloads[url] = thread
-            thread.start()
+            ).start()
+        else:
+            self._download_queue.put((url, dest_path, skip_images))
+
+    def _scan_and_queue_directory(self, url: str, base_path: str, skip_images: bool):
+        """Scan directory and queue all files for download"""
+        try:
+            # Get all files in the directory recursively
+            files = self.network.list_directory_recursive(url)
+            
+            # Queue regular files for download
+            file_count = 0
+            for file in files:
+                if not file.is_directory:
+                    dest_path = os.path.join(base_path, file.name)
+                    self._download_queue.put((file.url, dest_path, skip_images))
+                    file_count += 1
+            
+            # Emit signal with total file count
+            self.directory_scan_completed.emit(os.path.basename(base_path), file_count)
+                    
+        except Exception as e:
+            self.download_error.emit(os.path.basename(base_path), str(e))
 
     def _is_image(self, url: str) -> bool:
-        """Check if the URL points to an image file"""
-        image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg', '.tiff'}
-        return any(url.lower().endswith(ext) for ext in image_extensions)
+        """Check if URL points to an image file"""
+        image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp')
+        return url.lower().endswith(image_extensions)
 
     def cancel_download(self, url: str):
         """Cancel an active download"""
         with self._lock:
             if url in self._active_downloads:
-                # Note: We can't actually stop the thread, but we can remove it from active downloads
-                del self._active_downloads[url] 
+                del self._active_downloads[url]
+
+    def stop(self):
+        """Stop the download manager and clean up"""
+        self._stop_queue = True
+        with self._lock:
+            self._active_downloads.clear()
+        if self._queue_processor:
+            self._queue_processor.join(timeout=1)
+            self._queue_processor = None 

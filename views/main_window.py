@@ -22,10 +22,10 @@ class MainWindow(QMainWindow):
         self.setup_connections()
         self.current_url = ""
         
-        # Try to restore last URL
-        last_url = self.config.get_last_url()
-        if last_url:
-            self.address_bar.setText(last_url)
+        # Try to restore base URL
+        base_url = self.config.get_base_url()
+        if base_url:
+            self.address_bar.setText(base_url)
 
     def setup_ui(self):
         self.setWindowTitle("File Explorer Client")
@@ -54,10 +54,31 @@ class MainWindow(QMainWindow):
 
         # Create status bar with progress
         self.statusBar().showMessage("Ready")
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMaximumWidth(200)
-        self.progress_bar.hide()
-        self.statusBar().addPermanentWidget(self.progress_bar)
+        
+        # Create progress bar layout
+        progress_layout = QHBoxLayout()
+        
+        # File progress
+        self.file_progress_label = QLabel("Current file:")
+        self.file_progress_bar = QProgressBar()
+        self.file_progress_bar.setMaximumWidth(200)
+        self.file_progress_bar.hide()
+        
+        # Overall progress
+        self.overall_progress_label = QLabel("Overall progress:")
+        self.overall_progress_bar = QProgressBar()
+        self.overall_progress_bar.setMaximumWidth(200)
+        self.overall_progress_bar.hide()
+        
+        # Add progress bars to layout
+        progress_widget = QWidget()
+        progress_layout.addWidget(self.file_progress_label)
+        progress_layout.addWidget(self.file_progress_bar)
+        progress_layout.addWidget(self.overall_progress_label)
+        progress_layout.addWidget(self.overall_progress_bar)
+        progress_widget.setLayout(progress_layout)
+        
+        self.statusBar().addPermanentWidget(progress_widget)
 
     def create_menu_bar(self):
         menubar = self.menuBar()
@@ -93,22 +114,33 @@ class MainWindow(QMainWindow):
 
         # Connect downloader signals
         self.downloader.progress_updated.connect(self.update_download_progress)
+        self.downloader.overall_progress_updated.connect(self.update_overall_progress)
         self.downloader.download_completed.connect(self.handle_download_completed)
         self.downloader.download_error.connect(self.handle_download_error)
+        self.downloader.directory_scan_completed.connect(self.handle_directory_scan_completed)
+        self.downloader.all_downloads_completed.connect(self.handle_all_downloads_completed)
 
     def show_login_dialog(self):
         dialog = LoginDialog(self)
         
-        # Pre-fill credentials if available
+        # Pre-fill credentials and base URL if available
         if self.config.get_auth_header():
             dialog.set_credentials(
                 self.config.config.get('username', ''),
-                self.config.config.get('password', '')
+                self.config.config.get('password', ''),
+                self.config.get_base_url() or self.address_bar.text().strip()
             )
             
         if dialog.exec():
             if dialog.save_credentials:
-                self.network.set_credentials(dialog.username, dialog.password)
+                self.network.set_credentials(
+                    dialog.username, 
+                    dialog.password,
+                    dialog.base_url
+                )
+                # Update address bar with new base URL
+                if dialog.base_url:
+                    self.address_bar.setText(dialog.base_url)
             else:
                 # Use credentials for this session only
                 self.network.session.headers.update({
@@ -133,9 +165,6 @@ class MainWindow(QMainWindow):
             self.current_url = url
             self.address_bar.setText(url)
             self.statusBar().showMessage("Loading...")
-            
-            # Save URL to config
-            self.config.set_last_url(url)
             
             # Clear current view
             self.file_list.clear_and_set_path(url)
@@ -169,30 +198,48 @@ class MainWindow(QMainWindow):
             downloads_dir = "downloads"
             os.makedirs(downloads_dir, exist_ok=True)
             
-            # Create full save path
-            full_save_path = os.path.join(downloads_dir, save_path)
+            # Get all downloadable files
+            files = self.network.get_all_downloadable_files(url)
+            if not files:
+                self.statusBar().showMessage("No files to download")
+                return
+                
+            # Show progress bars
+            self.file_progress_bar.show()
+            self.overall_progress_bar.show()
+            self.file_progress_bar.setValue(0)
+            self.overall_progress_bar.setValue(0)
             
-            # Start download
-            self.downloader.start_download(url, full_save_path, skip_images)
-            self.progress_bar.show()
-            self.progress_bar.setValue(0)
+            # Start batch download
+            self.downloader.start_batch_download(files, downloads_dir, skip_images)
+            self.statusBar().showMessage(f"Downloading {len(files)} files...")
             
         except Exception as e:
             self.handle_download_error(save_path, str(e))
 
     @Slot(str, float)
     def update_download_progress(self, file_name: str, progress: float):
-        self.progress_bar.setValue(int(progress))
-        self.statusBar().showMessage(f"Downloading {file_name}...")
+        self.file_progress_label.setText(f"Current file: {file_name}")
+        self.file_progress_bar.setValue(int(progress))
+
+    @Slot(float)
+    def update_overall_progress(self, progress: float):
+        self.overall_progress_bar.setValue(int(progress))
 
     @Slot(str)
     def handle_download_completed(self, file_name: str):
-        self.progress_bar.hide()
         self.statusBar().showMessage(f"Downloaded {file_name}")
+
+    @Slot()
+    def handle_all_downloads_completed(self):
+        self.statusBar().showMessage("All downloads completed")
+        self.file_progress_bar.hide()
+        self.overall_progress_bar.hide()
 
     @Slot(str, str)
     def handle_download_error(self, file_name: str, error: str):
-        self.progress_bar.hide()
+        self.file_progress_bar.hide()
+        self.overall_progress_bar.hide()
         self.statusBar().showMessage("Download failed")
         if "401" in error:
             self.show_login_dialog()
@@ -201,4 +248,14 @@ class MainWindow(QMainWindow):
                 self, 
                 "Download Error",
                 f"Failed to download {file_name}: {error}"
-            ) 
+            )
+
+    @Slot(str, int)
+    def handle_directory_scan_completed(self, directory_name: str, file_count: int):
+        """Handle completion of directory scanning"""
+        self.statusBar().showMessage(f"Queued {file_count} files from {directory_name} for download")
+
+    def closeEvent(self, event):
+        """Handle application closing"""
+        self.downloader.stop()
+        super().closeEvent(event) 
