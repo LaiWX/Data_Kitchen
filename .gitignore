@@ -4,6 +4,9 @@
 # downloads
 downloads/
 
+# test_files
+test_files/
+
 # config
 *.json
 

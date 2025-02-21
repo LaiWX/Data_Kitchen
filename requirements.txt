@@ -1,4 +1,6 @@
 PySide6>=6.6.1
 requests>=2.31.0
 beautifulsoup4>=4.12.3
-urllib3>=2.1.0 
+urllib3>=2.1.0
+flask
+werkzeug
