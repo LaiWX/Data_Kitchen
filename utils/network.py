@@ -140,24 +140,31 @@ class NetworkManager:
         """Get all downloadable files recursively from a directory"""
         all_files = []
         try:
+            # If the URL doesn't end with '/', it's a file
+            if not url.endswith('/'):
+                name = url.rsplit('/', 1)[-1]
+                return [FileItem(
+                    name=name,
+                    is_directory=False,
+                    size='0',  # Size will be determined during actual download
+                    modified_date=datetime.now(),
+                    url=url
+                )]
+
+            # If we get here, it's a directory
             items = self.list_directory(url)
             for item in items:
                 # Skip parent directory
                 if item.name == "..":
                     continue
                     
-                # Update item's name to include the relative path
-                item.name = os.path.join(base_path, item.name).replace('\\', '/')
-                
                 if item.is_directory:
                     # Recursively get files from subdirectory
-                    subitems = self.get_all_downloadable_files(
-                        item.url, 
-                        item.name.rstrip('/')
-                    )
+                    subitems = self.get_all_downloadable_files(item.url)
                     all_files.extend(subitems)
                 else:
                     all_files.append(item)
+                    
         except Exception as e:
             print(f"Error getting files from {url}: {str(e)}")
         return all_files 

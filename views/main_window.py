@@ -194,25 +194,14 @@ class MainWindow(QMainWindow):
     @Slot(str, str, bool)
     def handle_download(self, url: str, save_path: str, skip_images: bool):
         try:
-            # Create downloads directory if it doesn't exist
-            downloads_dir = "downloads"
-            os.makedirs(downloads_dir, exist_ok=True)
-            
-            # Get all downloadable files
-            files = self.network.get_all_downloadable_files(url)
-            if not files:
-                self.statusBar().showMessage("No files to download")
-                return
-                
             # Show progress bars
             self.file_progress_bar.show()
             self.overall_progress_bar.show()
             self.file_progress_bar.setValue(0)
             self.overall_progress_bar.setValue(0)
             
-            # Start batch download
-            self.downloader.start_batch_download(files, downloads_dir, skip_images)
-            self.statusBar().showMessage(f"Downloading {len(files)} files...")
+            # Start download
+            self.downloader.start_download_task(url, skip_images)
             
         except Exception as e:
             self.handle_download_error(save_path, str(e))

@@ -115,6 +115,31 @@ class DownloadManager(QObject):
             with self._lock:
                 self._active_downloads.pop(url, None)
 
+    def start_download_task(self, url: str, skip_images: bool = False):
+        """Start a new download task, handling both single files and directories"""
+        try:
+            # Determine if it's a directory or single file
+            is_directory = url.endswith('/')
+            
+            # Create base download directory
+            base_dir = "downloads"
+            if is_directory:
+                base_dir = os.path.join(base_dir, url.rstrip('/').split('/')[-1])
+            
+            os.makedirs(base_dir, exist_ok=True)
+            
+            # Get files to download
+            files = self.network.get_all_downloadable_files(url)
+            if not files:
+                self.download_error.emit("", "No files to download")
+                return
+                
+            # Start the batch download
+            self.start_batch_download(files, base_dir, skip_images)
+            
+        except Exception as e:
+            self.download_error.emit("", str(e))
+
     def start_batch_download(self, files: List[FileItem], base_dir: str, skip_images: bool = False):
         """Start downloading a batch of files"""
         with self._lock:
@@ -122,19 +147,26 @@ class DownloadManager(QObject):
             self._completed_files = 0
             
         for file in files:
-            dest_path = os.path.join(base_dir, file.name)
+            # For single files or files in directory
+            file_path = self._get_relative_path(file.url, base_dir)
+            dest_path = os.path.join(base_dir, file_path)
             self._download_queue.put((file.url, dest_path, skip_images))
 
-    def start_download(self, url: str, dest_path: str, skip_images: bool = False):
-        """Start a new download"""
-        # Check if this is a directory download
-        if url.endswith('/'):
-            threading.Thread(
-                target=self._scan_and_queue_directory,
-                args=(url, dest_path, skip_images)
-            ).start()
-        else:
-            self._download_queue.put((url, dest_path, skip_images))
+    def _get_relative_path(self, url: str, base_dir: str) -> str:
+        """Get the relative path for a file based on its URL and base directory"""
+        base_name = os.path.basename(base_dir)
+        url_parts = url.split('/')
+        
+        # If URL doesn't contain base_name, just return the file name
+        if base_name not in url_parts:
+            return url_parts[-1]
+            
+        # Get the path after base_name
+        try:
+            start_idx = url_parts.index(base_name) + 1
+            return '/'.join(url_parts[start_idx:])
+        except ValueError:
+            return url_parts[-1]
 
     def _scan_and_queue_directory(self, url: str, base_path: str, skip_images: bool):
         """Scan directory and queue all files for download"""
